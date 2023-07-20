@@ -1,4 +1,20 @@
 import numpy as np
+import os
+from matplotlib.pyplot import imread
+
+def load_imgs_gray(path, height, width):
+    data_raw = []
+    _filenames = os.listdir(path)
+
+    for f in _filenames:
+        im = imread(path + f)
+        if im.shape[0] == height and im.shape[1] == width:
+            data_raw.append(im.flatten())
+    
+    return data_raw
+
+
+
 
 def partitions(img, tile_size, n_tiles):
     X = []
