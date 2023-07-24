@@ -76,7 +76,7 @@ class pyGAN:
         else:
             self.dis_Ws = self._weights_wrapper(self.dis_n_inputs, self.dis_hiddens, self.dis_n_outputs)
 
-        self.gen_Hs = []
+        self.dis_Hs = []
         self.dis_mse_trace = []
 
         self.dis_X_means = None
@@ -133,21 +133,13 @@ class pyGAN:
             
 
         X = self._standardizeX(X)
-        if self.classifier:
-            self.iv = self._make_indicator_vars(T)
-
 
         for epoch in range(n_epochs):
             #Forward Prop
-            if self.classifier:
-                Y_classes, Y = self._fprop(X)
-            else:
-                Y = self._fprop(X)
-            #Backward Prop
-            if self.classifier:
-                self._bprop(X, Y, learning_rate)
-            else:
-                self._bprop(X, Y, learning_rate, target=self._standardizeT(T))
+            gen_Y = self._fprop(X, type="G")
+            dis_Y = self._fprop(gen_Y, type="D")
+
+            self._bprop(X, dis_Y, learning_rate, target=self._standardizeT(T))
 
             if self.classifier:
                 self.mse_trace.append(self._E(X, self.iv))
@@ -168,37 +160,64 @@ class pyGAN:
             return self._unstandardizeT(Y)
 
 
-    def _fprop(self, X):
-        self.Hs = [X]
-        self.Hs.append(self._f(self._add_ones(X) @ self.weights[0]))
+    def _fprop(self, X, type):
+
+        if type == "G":
+            Hs = self.gen_Hs
+            Ws = self.gen_Ws            
+        else:
+            Hs = self.dis_Hs
+            Ws = self.dis_Ws
+
+        Hs = [X]
+        Hs.append(self._f(self._add_ones(X) @ Ws[0]))
 
         for i in range(1,len(self.weights)-1):
-            self.Hs.append(self._f(self._add_ones(self.Hs[-1]) @ self.weights[i]))
+            Hs.append(self._f(self._add_ones(Hs[-1]) @ Ws[i]))
 
         #Takes care of edge case of 0 hidden layers. 
-        if self.n_hidden_layers == 0:
-            Y = self.Hs[-1]
-        else:
-            Y = self._add_ones(self.Hs[-1]) @ self.weights[-1]
+        # if self.n_hidden_layers == 0:
+        #     Y = self.Hs[-1]
+        # else:
+        Y = self._add_ones(Hs[-1]) @ Ws[-1]
 
-        if self.classifier:
+        if type == "G":
+            self.gen_Hs = Hs
+        else:   
+            self.dis_Hs = Hs
+
+        if type == "D":
             Y_softmax = self._softmax(Y)
             Y_classes = self.classes[np.argmax(Y_softmax, axis=1)]
             return Y_classes, Y_softmax
         else:
             return Y
 
-    def _bprop(self, X, Y, learning_rate, target=None):
-        if self.classifier:
-            delta = -2 * (self.iv - Y)    
-        else:
-            delta = -2 * (target - Y)
+    def _bprop(self, X, Y, learning_rate, prop_gen=False, X_gen = None):
+        delta = -2 * (self.iv - Y)
+        deltai = -0.5 * np.power((self.iv - Y), -0.5)
+        #delta = -2 * (target - Y)
             
-        for i in range(len(self.weights)-1, 0, -1):
-            self.weights[i] -= learning_rate * self._add_ones(self.Hs[i]).T @ delta
-            delta = delta @ self.weights[i][1:, :].T * self._df(self.Hs[i])
+        for i in range(len(self.dis_Ws)-1, 0, -1):
+            self.dis_Ws[i] -= learning_rate * self._add_ones(self.dis_Hs[i]).T @ delta
+            delta = delta @ self.dis_Ws[i][1:, :].T * self._df(self.dis_Hs[i])
+            
+            if prop_gen:
+                deltai = deltai @ self.dis_Ws[i][1:, :].T * self._df(self.dis_Hs[i])
+        self.dis_Ws[0] -= learning_rate * self._add_ones(X).T @ delta
+        
+        if prop_gen:
+            self._bprop_gen(X_gen, Y, deltai, learning_rate)
 
-        self.weights[0] -= learning_rate * self._add_ones(X).T @ delta
+
+    def _bprop_gen(self, X, Y, deltai, learning_rate):
+        
+        for i in range(len(self.gen_Ws)-1, 0, -1):
+            self.gen_Ws[i] -= learning_rate * self._add_ones(self.gen_Hs[i]).T @ deltai
+            deltai = deltai @ self.gen_Ws[i][1:, :].T * self._df(self.gen_Hs[i])
+
+        self.gen_Ws[0] -= learning_rate * self._add_ones(X).T @ deltai
+
 
     def _standardizeX(self, X):        
         if self.X_means is None:
