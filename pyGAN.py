@@ -7,6 +7,7 @@ class pyGAN:
         self.debug = False  
 
         self.create_generator(n_inputs, n_outputs, gen_n_hidden_units_per_layer)
+        self.create_discriminator(n_outputs, [0, 1], dis_n_hidden_units_per_layer)
         
         self.epochs = None
 
@@ -63,12 +64,12 @@ class pyGAN:
         self.gen_T_means = None
         self.gen_T_stds = None
 
-    def create_discriminator(self, n_inputs, n_outputs, hiddens):
+    def create_discriminator(self, n_inputs, outputs, hiddens):
         self.dis_hiddens = hiddens
         self.dis_n_hidden_layers = len(hiddens)
 
         self.dis_n_inputs = n_inputs
-        self.dis_n_outputs = n_outputs
+        self.dis_n_outputs = outputs
 
         self.dis_Ws = []
         if self.dis_n_hidden_layers == 0:
@@ -130,7 +131,6 @@ class pyGAN:
 
         if self.debug:
             print(f'Adjusted {learning_rate=}')
-            
 
         X = self._standardizeX(X)
 
@@ -139,7 +139,23 @@ class pyGAN:
             gen_Y = self._fprop(X, type="G")
             dis_Y = self._fprop(gen_Y, type="D")
 
-            self._bprop(X, dis_Y, learning_rate, target=self._standardizeT(T))
+
+            #Back Prop 1
+            T_fake = np.zeros((X.shape[0], 1))
+            self.dis_iv = self._make_indicator_vars(T_fake)
+            self._bprop(gen_Y, dis_Y, learning_rate, prop_gen=True, X_gen=X)
+
+            self.gen_mse_trace.append(self._E(X, self._standardizeT(T)))
+
+
+            T_ST = self._standardizeT(T)
+            #Forward Prop 2
+            dis_Y = self._fprop(T_ST, type="D")
+            #Back Prop 2            
+            T_true = np.ones((X.shape[0], 1))
+            self.dis_iv = self._make_indicator_vars(T_true)
+            self._bprop(T_ST, dis_Y, learning_rate, prop_gen=False)
+
 
             if self.classifier:
                 self.mse_trace.append(self._E(X, self.iv))
