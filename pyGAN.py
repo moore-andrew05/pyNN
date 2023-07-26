@@ -69,7 +69,8 @@ class pyGAN:
         self.dis_n_hidden_layers = len(hiddens)
 
         self.dis_n_inputs = n_inputs
-        self.dis_n_outputs = outputs
+        self.dis_classes = np.array(outputs).reshape(-1,1)
+        self.dis_n_outputs = len(outputs)
 
         self.dis_Ws = []
         if self.dis_n_hidden_layers == 0:
@@ -132,12 +133,12 @@ class pyGAN:
         if self.debug:
             print(f'Adjusted {learning_rate=}')
 
-        X = self._standardizeX(X)
+        X, self.gen_X_means, self.gen_X_stds = self._standardizeX(X, self.gen_X_means, self.gen_X_stds)
 
         for epoch in range(n_epochs):
             #Forward Prop
             gen_Y = self._fprop(X, type="G")
-            dis_Y = self._fprop(gen_Y, type="D")
+            Y_classes, dis_Y = self._fprop(gen_Y, type="D")
 
 
             #Back Prop 1
@@ -150,18 +151,12 @@ class pyGAN:
 
             T_ST = self._standardizeT(T)
             #Forward Prop 2
-            dis_Y = self._fprop(T_ST, type="D")
+            Y_classes, dis_Y = self._fprop(T_ST, type="D")
             #Back Prop 2            
             T_true = np.ones((X.shape[0], 1))
             self.dis_iv = self._make_indicator_vars(T_true)
             self._bprop(T_ST, dis_Y, learning_rate, prop_gen=False)
 
-
-            if self.classifier:
-                self.mse_trace.append(self._E(X, self.iv))
-                self.percent_correct_trace.append(self.percent_correct(T, Y_classes))
-            else:
-                self.mse_trace.append(self._E(X, T))
         self.epochs = n_epochs
 
     def use(self, X, standardized=False):
@@ -188,7 +183,7 @@ class pyGAN:
         Hs = [X]
         Hs.append(self._f(self._add_ones(X) @ Ws[0]))
 
-        for i in range(1,len(self.weights)-1):
+        for i in range(1,len(Ws)-1):
             Hs.append(self._f(self._add_ones(Hs[-1]) @ Ws[i]))
 
         #Takes care of edge case of 0 hidden layers. 
@@ -204,14 +199,14 @@ class pyGAN:
 
         if type == "D":
             Y_softmax = self._softmax(Y)
-            Y_classes = self.classes[np.argmax(Y_softmax, axis=1)]
+            Y_classes = self.dis_classes[np.argmax(Y_softmax, axis=1)]
             return Y_classes, Y_softmax
         else:
             return Y
 
     def _bprop(self, X, Y, learning_rate, prop_gen=False, X_gen = None):
-        delta = -2 * (self.iv - Y)
-        deltai = -0.5 * np.power((self.iv - Y), -0.5)
+        delta = -2 * (self.dis_iv - Y)
+        deltai = -0.5 * np.power((self.dis_iv - Y), -0.5)
         #delta = -2 * (target - Y)
             
         for i in range(len(self.dis_Ws)-1, 0, -1):
@@ -235,12 +230,12 @@ class pyGAN:
         self.gen_Ws[0] -= learning_rate * self._add_ones(X).T @ deltai
 
 
-    def _standardizeX(self, X):        
-        if self.X_means is None:
-            self.X_means = np.mean(X, axis=0)
-            self.X_stds = np.std(X, axis=0)
-            self.X_stds[self.X_stds == 0] = 1
-        return (X - self.X_means) / self.X_stds
+    def _standardizeX(self, X, X_means, X_stds):        
+        if X_means is None:
+            X_means = np.mean(X, axis=0)
+            X_stds = np.std(X, axis=0)
+            X_stds[X_stds == 0] = 1
+        return (X - X_means) / X_stds, X_means, X_stds
         
     def _standardizeT(self, T):
         # return T
