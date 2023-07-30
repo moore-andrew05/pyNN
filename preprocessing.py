@@ -11,8 +11,7 @@ def load_imgs_gray(path, height, width):
         if im.shape[0] == height and im.shape[1] == width:
             data_raw.append(im.flatten())
     
-    return data_raw
-
+    return np.array(data_raw)
 
 
 
