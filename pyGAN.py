@@ -123,8 +123,14 @@ class pyGAN:
 
     def _make_W(self, ni, nu):
         return np.random.uniform(-1, 1, size=(ni + 1, nu)) / np.sqrt(ni + 1)
+    
+    def _pre_train_dis(self, X, T, learning_rate, pretrain_epochs):
+        for _ in range(pretrain_epochs):
+            Y_classes, dis_Y = self._fprop(X, type="D")
+            self.dis_iv = self._make_indicator_vars(T)
+            self._bprop(X, dis_Y, learning_rate, prop_gen=False)
 
-    def train(self, X, T, n_epochs, learning_rate):
+    def train(self, X, T, n_epochs, learning_rate, pretrainX, pretrainT, pretrain_epochs):
         if self.debug:
             print('----------Starting train()')
             
@@ -135,7 +141,13 @@ class pyGAN:
 
         X, self.gen_X_means, self.gen_X_stds = self._standardizeX(X, self.gen_X_means, self.gen_X_stds)
 
+
+        if self.epochs is None:
+            self._pre_train_dis(pretrainX, pretrainT, learning_rate, pretrain_epochs)
         for epoch in range(n_epochs):
+            #Pretrain Discriminator
+
+
             #Forward Prop
             gen_Y = self._fprop(X, type="G")
             Y_classes, dis_Y = self._fprop(gen_Y, type="D")
@@ -144,14 +156,14 @@ class pyGAN:
             #Back Prop 1
             T_fake = np.zeros((X.shape[0], 1))
             self.dis_iv = self._make_indicator_vars(T_fake)
-            self._bprop(gen_Y, dis_Y, learning_rate, prop_gen=True, X_gen=X)
+            self._bprop(gen_Y, dis_Y, learning_rate, prop_gen=True, X_gen=X, Y_gen=gen_Y)
 
-            self.gen_mse_trace.append(self._E(X, self._standardizeT(T)))
+            self.gen_mse_trace.append(self._E(X, self._standardizeT(T), net_type="G"))
 
 
             T_ST = self._standardizeT(T)
             #Forward Prop 2
-            Y_classes, dis_Y = self._fprop(T_ST, type="D")
+            Y_classes, dis_Y = self._fprop(T, type="D")
             #Back Prop 2            
             T_true = np.ones((X.shape[0], 1))
             self.dis_iv = self._make_indicator_vars(T_true)
@@ -159,15 +171,15 @@ class pyGAN:
 
         self.epochs = n_epochs
 
-    def use(self, X, standardized=False):
+    def use(self, X, net_type, standardized=False):
         if not standardized:
-            X = self._standardizeX(X)
+            X, _, _ = self._standardizeX(X, None, None)
 
-        if self.classifier:
-            Y_classes, Y_softmax = self._fprop(X)
+        if net_type == "D":
+            Y_classes, Y_softmax = self._fprop(X, type="D")
             return Y_classes, Y_softmax
         else:
-            Y = self._fprop(X)
+            Y = self._fprop(X, type="G")
             return self._unstandardizeT(Y)
 
 
@@ -204,7 +216,7 @@ class pyGAN:
         else:
             return Y
 
-    def _bprop(self, X, Y, learning_rate, prop_gen=False, X_gen = None):
+    def _bprop(self, X, Y, learning_rate, prop_gen=False, X_gen = None, Y_gen=None):
         delta = -2 * (self.dis_iv - Y)
         deltai = -0.5 * np.power((self.dis_iv - Y), -0.5)
         #delta = -2 * (target - Y)
@@ -215,14 +227,18 @@ class pyGAN:
             
             if prop_gen:
                 deltai = deltai @ self.dis_Ws[i][1:, :].T * self._df(self.dis_Hs[i])
+
         self.dis_Ws[0] -= learning_rate * self._add_ones(X).T @ delta
         
         if prop_gen:
+            deltai = deltai @ self.dis_Ws[0][1:,:].T * self._df(Y_gen)
             self._bprop_gen(X_gen, Y, deltai, learning_rate)
 
 
     def _bprop_gen(self, X, Y, deltai, learning_rate):
         
+        
+
         for i in range(len(self.gen_Ws)-1, 0, -1):
             self.gen_Ws[i] -= learning_rate * self._add_ones(self.gen_Hs[i]).T @ deltai
             deltai = deltai @ self.gen_Ws[i][1:, :].T * self._df(self.gen_Hs[i])
@@ -239,26 +255,26 @@ class pyGAN:
         
     def _standardizeT(self, T):
         # return T
-        if self.T_means is None:
-            self.T_means = np.mean(T, axis=0)
-            self.T_stds = np.std(T, axis=0)
-            self.T_stds[self.T_stds == 0] = 1
-        return (T - self.T_means) / self.T_stds
+        if self.gen_T_means is None:
+            self.gen_T_means = np.mean(T, axis=0)
+            self.gen_T_stds = np.std(T, axis=0)
+            self.gen_T_stds[self.gen_T_stds == 0] = 1
+        return (T - self.gen_T_means) / self.gen_T_stds
 
     def _unstandardizeT(self, T):
         # return T
         
-        if self.T_means is None:
+        if self.gen_T_means is None:
             raise Exception('T not standardized yet')
 
-        return (T * self.T_stds) + self.T_means
+        return (T * self.gen_T_stds) + self.gen_T_means
     
-    def _E(self, X, T_iv_or_T):
-        if self.classifier:
-            Y_class_names, Y_softmax = self.use(X, standardized=True)
+    def _E(self, X, T_iv_or_T, net_type):
+        if net_type == "D":
+            Y_class_names, Y_softmax = self.use(X, "D", standardized=True)
             sq_diffs = (T_iv_or_T - Y_softmax) ** 2
         else:
-            Y = self.use(X, standardized=True)
+            Y = self.use(X, "G", standardized=True)
             sq_diffs = (T_iv_or_T - Y) ** 2
         return np.mean(sq_diffs)
     
@@ -283,11 +299,11 @@ class pyGAN:
         return 100 * np.mean(T == Y_classes)
 
     def plot_mse_trace(self):
-        if len(self.mse_trace) == 0:
+        if len(self.gen_mse_trace) == 0:
             print("Train Model Before Attempting to Plot!")
             return None
 
-        plt.plot(self.mse_trace)
+        plt.plot(self.gen_mse_trace)
         plt.title("MSE Trace")
         plt.xlabel("Epoch #")
         plt.ylabel("MSE")
